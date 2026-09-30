@@ -18,6 +18,19 @@ services:
     build: ./services/order-service
     container_name: complab-order-service
     environment:
+      PORT: 5001
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+    expose:
+      - "5001"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
+  inventory-service:
+    build: ./services/inventory-service
+    container_name: complab-inventory-service
+    environment:
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
     depends_on:
       rabbitmq:
@@ -34,6 +47,16 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  notification-service:
+    build: ./services/notification-service
+    container_name: complab-notification-service
+    environment:
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    restart: unless-stopped
+
   gateway:
     build: ./gateway
     container_name: complab-gateway
@@ -41,10 +64,9 @@ services:
       - "5000:5000"
     environment:
       PORT: 5000
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
+      ORDER_SERVICE_URL: http://order-service:5001
     depends_on:
-      rabbitmq:
-        condition: service_healthy
+      - order-service
     restart: unless-stopped
 
   frontend:

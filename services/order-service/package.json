@@ -6,6 +6,7 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "amqplib": "^0.10.9"
+    "amqplib": "^0.10.9",
+    "express": "^4.19.2"
   }
 }

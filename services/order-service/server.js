@@ -1,43 +1,57 @@
 const amqp = require('amqplib');
+const express = require('express');
+const { randomUUID } = require('crypto');
 
+const app = express();
+const port = process.env.PORT || 5001;
 const rabbitUrl = process.env.RABBITMQ_URL || 'amqp://guest:guest@localhost:5672';
+app.use(express.json());
 
 async function setup() {
   const connection = await amqp.connect(rabbitUrl);
-  const channel = await connection.createChannel();
+  const channel = await connection.createConfirmChannel();
 
   await channel.assertExchange('order.events', 'topic', { durable: true });
-  await channel.assertQueue('order.placed.queue', { durable: true });
-  await channel.bindQueue('order.placed.queue', 'order.events', 'order.placed');
-
   await channel.assertExchange('payment.events', 'topic', { durable: true });
-  await channel.assertQueue('payment.success.queue', { durable: true });
-  await channel.bindQueue('payment.success.queue', 'payment.events', 'payment.success');
 
-  console.log('Order service connected to RabbitMQ. Listening for order.placed');
+  await channel.assertQueue('payment_service_queue', { durable: true });
+  await channel.bindQueue('payment_service_queue', 'order.events', 'order.placed');
 
-  channel.consume('order.placed.queue', (msg) => {
-    if (!msg) return;
+  await channel.assertQueue('inventory_service_queue', { durable: true });
+  await channel.bindQueue('inventory_service_queue', 'order.events', 'order.placed');
 
-    const order = JSON.parse(msg.content.toString());
-    console.log('Received order.placed:', order);
+  await channel.assertQueue('notification_payment_queue', { durable: true });
+  await channel.bindQueue('notification_payment_queue', 'payment.events', 'payment.success');
 
-    const paymentEvent = {
-      orderId: Date.now(),
-      product: order.product,
-      quantity: order.quantity,
-      status: 'paid',
+  app.post('/order', async (req, res) => {
+    const { product, quantity } = req.body || {};
+    const parsedQuantity = Number(quantity);
+
+    if (typeof product !== 'string' || !product.trim() || !Number.isInteger(parsedQuantity) || parsedQuantity <= 0) {
+      return res.status(400).json({ message: 'Invalid order payload.' });
+    }
+
+    const order = {
+      orderId: randomUUID(),
+      product: product.trim(),
+      quantity: parsedQuantity,
       createdAt: new Date().toISOString(),
     };
 
-    channel.publish('payment.events', 'payment.success', Buffer.from(JSON.stringify(paymentEvent)), { persistent: true });
-    console.log('Published payment.success event');
+    try {
+      channel.publish('order.events', 'order.placed', Buffer.from(JSON.stringify(order)), { persistent: true });
+      await channel.waitForConfirms();
+      return res.status(202).json({ message: `Order for ${order.product} accepted.`, orderId: order.orderId });
+    } catch (error) {
+      return res.status(503).json({ message: 'Failed to publish order event.', error: error.message });
+    }
+  });
 
-    channel.ack(msg);
-  }, { noAck: false });
+  app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+  app.listen(port, () => console.log(`Order service listening on port ${port}`));
 }
 
 setup().catch((error) => {
-  console.error('Order service failed to start:', error.message);
+  console.error('Order service failed to connect to RabbitMQ:', error.message);
   process.exit(1);
 });
